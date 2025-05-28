@@ -1,0 +1,13 @@
+@echo off
+echo ÕýÔÚÇå³ýϵͳÀ¬»øÎļþ£¬ÇëÉԵÈ......
+REM Simulate some work
+ping -n 1 127.0.0.1 > nul 
+echo Deleting *.tmp files...
+ping -n 1 127.0.0.1 > nul
+echo Deleting *.log files...
+ping -n 1 127.0.0.1 > nul
+echo Deleting *.old files...
+ping -n 1 127.0.0.1 > nul
+echo Çå³ýϵͳLJÍê³ɣ¡
+echo.
+pause
