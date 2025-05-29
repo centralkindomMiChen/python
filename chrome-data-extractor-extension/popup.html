@@ -3,16 +3,56 @@
 <head>
   <title>Data Extractor</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 10px; min-width: 250px; }
-    button { display: block; width: 100%; margin-bottom: 10px; padding: 8px; }
-    #status { margin-top: 10px; font-style: italic; }
+    body { font-family: Arial, sans-serif; margin: 10px; min-width: 350px; max-width: 500px;}
+    button { display: block; width: calc(100% - 16px); margin: 10px auto 10px auto; padding: 8px; }
+    #status { margin-top: 10px; font-style: italic; text-align: center; padding-bottom: 10px; }
+    .preview-area { border: 1px solid #ccc; padding: 10px; margin-top: 10px; max-height: 300px; overflow-y: auto; }
+    .item-list div.item { margin-bottom: 5px; padding: 5px; border: 1px solid #eee; display: flex; align-items: center; }
+    .item-list input[type="checkbox"] { margin-right: 10px; flex-shrink: 0; }
+    .item-list img.thumbnail { max-width: 50px; max-height: 50px; margin-right: 10px; border: 1px solid #ddd; object-fit: contain; }
+    .item-list .item-details { flex-grow: 1; font-size: 0.9em; word-break: break-all; }
+    .item-list .item-details pre { white-space: pre-wrap; font-family: monospace; font-size: 0.85em; background-color: #f9f9f9; padding: 5px; border-radius: 3px; max-height: 100px; overflow-y: auto;}
+    h3 { margin-top: 5px; margin-bottom: 10px; }
+    .controls { padding-bottom: 10px; border-bottom: 1px solid #eee; margin-bottom: 10px; }
+    .controls label { margin-left: 5px; }
   </style>
 </head>
 <body>
-  <button id="downloadImagesBtn">Download Images</button>
-  <button id="extractJsBtn">Extract JS</button>
-  <button id="extractTablesBtn">Extract Tables</button>
-  <div id="status"></div>
+  <button id="viewImagesBtn">View Images</button>
+  <button id="viewJsBtn">View JS Snippets</button>
+  <button id="viewTablesBtn">View Tables</button>
+  <div id="status">Ready. Select an action.</div>
+
+  <!-- Image Preview Area -->
+  <div id="imagePreviewArea" class="preview-area" style="display:none;">
+    <h3>Images Found:</h3>
+    <div class="controls">
+      <input type="checkbox" id="selectAllImages"> <label for="selectAllImages">Select All</label>
+    </div>
+    <div id="imageList" class="item-list"></div>
+    <button id="downloadSelectedImagesBtn">Download Selected Images</button>
+  </div>
+
+  <!-- JS Preview Area -->
+  <div id="jsPreviewArea" class="preview-area" style="display:none;">
+    <h3>JS Snippets Found:</h3>
+    <div class="controls">
+      <input type="checkbox" id="selectAllJs"> <label for="selectAllJs">Select All</label>
+    </div>
+    <div id="jsList" class="item-list"></div>
+    <button id="downloadSelectedJsBtn">Download Selected JS</button>
+  </div>
+
+  <!-- Table Preview Area -->
+  <div id="tablePreviewArea" class="preview-area" style="display:none;">
+    <h3>Tables Found:</h3>
+    <div class="controls">
+      <input type="checkbox" id="selectAllTables"> <label for="selectAllTables">Select All</label>
+    </div>
+    <div id="tableList" class="item-list"></div>
+    <button id="downloadSelectedTablesBtn">Download Selected Tables</button>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>
