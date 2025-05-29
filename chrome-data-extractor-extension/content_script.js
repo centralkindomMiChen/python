@@ -103,6 +103,9 @@ if (!window.hasRunContentScriptInitialized) {
             const scriptPromises = [];
             const allScriptsOnPage = Array.from(document.querySelectorAll('script'));
             let actualScriptContentAdded = false;
+            let successCount = 0;
+            let failureCount = 0;
+            let hasFetchFailure = false; // Flag to track if any fetch specifically failed
 
             for (const scriptId of message.scriptIds) {
                 const index = parseInt(scriptId.split('_')[1]);
@@ -111,6 +114,7 @@ if (!window.hasRunContentScriptInitialized) {
 
 `;
                     console.warn("Invalid script ID requested:", scriptId);
+                    failureCount++;
                     continue;
                 }
                 const script = allScriptsOnPage[index];
@@ -122,6 +126,7 @@ if (!window.hasRunContentScriptInitialized) {
                 } catch (e) {
                     scriptIdentifier = `invalid_src_#${index}: ${script.src}`;
                     console.warn(`Error constructing URL for script ${scriptId}: ${script.src}`, e.message);
+                    // This case might be considered a failure for the script itself, even if not a fetch failure yet.
                 }
 
                 if (script.src) {
@@ -133,21 +138,33 @@ if (!window.hasRunContentScriptInitialized) {
                             })
                             .then(text => {
                                 if (text.trim()) actualScriptContentAdded = true;
+                                successCount++;
                                 combinedJsContent += `// --- Script from ${scriptIdentifier} ---
 ${basicJsPrettify(text)}
 
 `;
                             })
                             .catch(error => {
+                                failureCount++;
+                                hasFetchFailure = true; // Mark that a fetch failed
                                 console.warn(`Failed to fetch script ${scriptIdentifier}:`, error.message);
-                                combinedJsContent += `// --- Failed to fetch script ${scriptIdentifier}: ${error.message} ---
+                                combinedJsContent += `// --- Failed to fetch script ${scriptIdentifier}: ${error.message || 'Network error or resource access denied (CSP/CORS)'} ---
 
 `;
                             })
                     );
                 } else { 
                     let inlineContent = script.textContent || "";
-                    if (inlineContent.trim()) actualScriptContentAdded = true;
+                    if (inlineContent.trim()) {
+                        actualScriptContentAdded = true;
+                        successCount++;
+                    } else {
+                        // Consider empty inline script as a "minor" issue, not necessarily a hard failure unless specified
+                        // For now, we'll count it as processed if it's selected, even if empty.
+                        // If empty inline scripts should be a failure, increment failureCount here.
+                        // For this task, focusing on external fetch, let's assume empty inline is not a 'failure'.
+                        // If an inline script was *expected* to have content and doesn't, it's a different kind of issue.
+                    }
                     combinedJsContent += `// --- Inline Script #${index} ---
 ${basicJsPrettify(inlineContent)}
 
@@ -158,49 +175,47 @@ ${basicJsPrettify(inlineContent)}
             try {
                 await Promise.all(scriptPromises);
             } catch (error) {
+                // This catch is for Promise.all itself if it's configured to fail fast,
+                // but individual catches above should handle and log specific errors.
+                // It's unlikely to be hit if all promises have their own .catch.
                 console.error("Error awaiting script fetches for getFullJsContents:", error);
-                combinedJsContent += `// --- Error occurred during batch fetching of scripts ---
+                // failureCount might already account for this, but ensure it does if this path is possible.
+                // combinedJsContent += `// --- Error occurred during batch fetching of scripts ---
 
-`;
+//`;
             }
             
+            let errorStatusMessage = null;
+            if (failureCount > 0) {
+                errorStatusMessage = `${failureCount} of ${message.scriptIds.length} selected scripts encountered issues. `;
+                if (hasFetchFailure) {
+                    errorStatusMessage += "Some external scripts could not be downloaded (reasons may include network errors, page's Content Security Policy, or CORS restrictions). ";
+                }
+                errorStatusMessage += "Check the downloaded file for details on which scripts failed.";
+            }
+            // If no *actual* script content was added (e.g., all selected scripts were empty or failed to fetch)
+            // and there were no specific failures already reported, set a generic error.
+            if (!actualScriptContentAdded && message.scriptIds.length > 0 && failureCount === 0) {
+                 errorStatusMessage = "No valid script content could be retrieved for the selected items. They might be empty or inaccessible.";
+            }
+
+
             const responsePayload = {
                 action: "combinedJsContentToDownload",
                 content: combinedJsContent,
-                filename: `selected_scripts_${message.hostname || "unknown_page"}.js`
+                filename: `selected_scripts_${message.hostname || "unknown_page"}.js`,
+                errorStatus: errorStatusMessage // This will be null if failureCount is 0 and actualScriptContentAdded is true
             };
-
-            if (!actualScriptContentAdded && message.scriptIds.length > 0) {
-                 // Check if any script content was actually added, beyond headers/error comments
-                const placeholderHeaderLength = (`// Selected JavaScript from ${window.location.href}\n// Extraction timestamp: ${new Date().toISOString()}\n// Page Hostname: ${message.hostname || "unknown_page"}\n\n`).length;
-                let contentWithoutHeader = combinedJsContent.substring(placeholderHeaderLength);
-                let onlyCommentsOrErrors = true;
-                contentWithoutHeader.split("// ---").forEach(segment => {
-                    if (segment.includes("---") && segment.split("\n").slice(1).join("\n").trim() !== "") {
-                        // Check if the part after a separator line actually contains non-empty lines
-                        if (segment.split("\n").slice(1).some(line => line.trim() !== "" && !line.trim().startsWith("//"))) {
-                             onlyCommentsOrErrors = false;
-                        }
-                    } else if (!segment.includes("---") && segment.trim() !== "") {
-                         onlyCommentsOrErrors = false;
-                    }
-                });
-                if(onlyCommentsOrErrors && !scriptPromises.length){ // If only inline scripts and all were empty or only comments
-                     // This part is tricky, might need more robust check if script content itself is just comments
-                }
-
-
-                // Simplified check: if no scriptPromises were successful and no inline scripts had substantial content
-                // For now, rely on the actualScriptContentAdded flag. If it's false, it means no script had meaningful content.
-                if (!actualScriptContentAdded) {
-                     responsePayload.errorStatus = "No valid script content could be retrieved for the selected items. File may contain only headers or error messages.";
-                }
+            
+            // Adjust errorStatus if everything was "successful" but no actual content was found
+            if (successCount === message.scriptIds.length && !actualScriptContentAdded && message.scriptIds.length > 0 && !errorStatusMessage) {
+                 responsePayload.errorStatus = "Selected scripts were processed, but all were empty or yielded no content.";
             }
 
 
             chrome.runtime.sendMessage(responsePayload);
         })();
-        sendResponse({status: "JS content processing initiated. Full content will be sent separately."});
+        sendResponse({status: `JS content processing: ${successCount} success, ${failureCount} failures. Results will be sent.`});
         return true; 
     }
 
@@ -212,22 +227,28 @@ Page Hostname: ${message.hostname || "unknown_page"}
 `;
         const allTablesOnPage = Array.from(document.querySelectorAll('table'));
         let actualTableDataAdded = false;
+        let successCount = 0;
+        let failureCount = 0;
+
 
         for (const tableId of message.tableIds) {
             const index = parseInt(tableId.split('_')[1]);
             if (isNaN(index) || index < 0 || index >= allTablesOnPage.length) {
                 combinedCsvContent += `--- Invalid Table ID: ${tableId} ---\n\n`;
                 console.warn("Invalid table ID requested:", tableId);
+                failureCount++;
                 continue;
             }
             const table = allTablesOnPage[index];
             combinedCsvContent += `--- Table Index: ${index} (ID: ${tableId}) ---\n`;
             const rows = table.rows;
+            let tableHadData = false;
             if (rows.length > 0) {
                 for (let i = 0; i < rows.length; i++) {
                     const cells = rows[i].cells;
-                    if (cells.length > 0) { // Only consider a row if it has cells
-                        actualTableDataAdded = true; // Mark that we've found some data
+                    if (cells.length > 0) { 
+                        actualTableDataAdded = true; 
+                        tableHadData = true;
                         const rowData = [];
                         for (let j = 0; j < cells.length; j++) {
                             rowData.push(escapeCsvCell(cells[j].innerText !== undefined ? cells[j].innerText : cells[j].textContent));
@@ -236,21 +257,39 @@ Page Hostname: ${message.hostname || "unknown_page"}
                     }
                 }
             }
+            if (tableHadData) {
+                successCount++;
+            } else {
+                // If the table itself had no rows/cells, it could be considered a "minor failure" or just an empty table.
+                // For now, we only increment failureCount for invalid IDs.
+                // If an empty table should be a failure, increment failureCount here.
+                 combinedCsvContent += `(This table was empty or had no processable cells)\n`;
+            }
             combinedCsvContent += '\n\n';
         }
         
+        let errorStatusMessage = null;
+        if (failureCount > 0) { // Only for invalid IDs for now
+            errorStatusMessage = `${failureCount} of ${message.tableIds.length} selected table IDs were invalid. `;
+        }
+        if (!actualTableDataAdded && message.tableIds.length > 0 && failureCount < message.tableIds.length) { // Some tables were valid but all were empty
+             const mainMsg = "No actual data (rows/cells) found in the valid selected tables. ";
+             errorStatusMessage = errorStatusMessage ? errorStatusMessage + mainMsg : mainMsg;
+        }
+        if (errorStatusMessage) {
+            errorStatusMessage += "Check the downloaded file for details.";
+        }
+
+
         const responsePayload = {
             action: "combinedTableDataToDownload",
             content: combinedCsvContent,
-            filename: `selected_tables_${message.hostname || "unknown_page"}.csv`
+            filename: `selected_tables_${message.hostname || "unknown_page"}.csv`,
+            errorStatus: errorStatusMessage
         };
 
-        if (!actualTableDataAdded && message.tableIds.length > 0) {
-            responsePayload.errorStatus = "No valid table data (rows/cells) could be retrieved for the selected items. File may contain only headers or empty tables.";
-        }
-
         chrome.runtime.sendMessage(responsePayload);
-        sendResponse({status: "Table CSV processing completed and sent."});
+        sendResponse({status: `Table CSV processing: ${successCount} tables with data, ${failureCount} invalid IDs. Results sent.`});
         return false; 
     }
 

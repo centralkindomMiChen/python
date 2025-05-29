@@ -35,17 +35,14 @@ document.addEventListener('DOMContentLoaded', () => {
   function hideAllPreviewAreas() {
     [imagePreviewArea, jsPreviewArea, tablePreviewArea].forEach(area => area && (area.style.display = 'none'));
     [selectAllImagesCheckbox, selectAllJsCheckbox, selectAllTablesCheckbox].forEach(cb => cb && (cb.checked = false));
-    updateAllSectionsState(); // Ensure buttons are disabled when areas are hidden
+    updateAllSectionsState(); 
   }
 
   function updateSectionState(listDiv, downloadButton, selectAllCheckbox) {
     if (!listDiv || !downloadButton || !selectAllCheckbox) return;
-
     const checkboxes = listDiv.querySelectorAll('input[type="checkbox"]');
     const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
-
     downloadButton.disabled = checkedCount === 0;
-    
     if (checkboxes.length > 0 && checkedCount === checkboxes.length) {
         selectAllCheckbox.checked = true;
         selectAllCheckbox.indeterminate = false;
@@ -63,20 +60,16 @@ document.addEventListener('DOMContentLoaded', () => {
       updateSectionState(jsListDiv, downloadSelectedJsBtn, selectAllJsCheckbox);
       updateSectionState(tableListDiv, downloadSelectedTablesBtn, selectAllTablesCheckbox);
   }
-  
-  // Call initially to disable download buttons
   updateAllSectionsState();
-
 
   function suggestedFilename(url, defaultName = "download", itemHostname = "unknown_page") {
       if (url === 'data_url_preview_too_long' || url === 'invalid_url_or_base64_too_long' || !url) {
-          return `${defaultName}_${Date.now()}.txt`; // Or a more specific placeholder
+          return `${defaultName}_${Date.now()}.txt`; 
       }
       try {
           const urlObj = new URL(url);
           let filename = urlObj.pathname.substring(urlObj.pathname.lastIndexOf('/') + 1);
           if (filename) filename = decodeURIComponent(filename);
-          
           if (!filename || urlObj.protocol === 'data:') {
               const prefix = itemHostname !== "unknown_page" ? itemHostname : defaultName;
               if (url.startsWith('data:image/')) {
@@ -85,7 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   filename = `${prefix}_image.${extension}`;
               } else if (url.startsWith('data:')) {
                   filename = `${prefix}_data.txt`;
-              } else { // Fallback for URLs with no path filename
+              } else { 
                   filename = `${prefix}_${urlObj.hostname.replace(/\./g, '_') || 'file'}.html`;
               }
           }
@@ -102,7 +95,6 @@ document.addEventListener('DOMContentLoaded', () => {
           return (simpleName || defaultName).replace(/[<>:"/\\|?*]+/g, '_').substring(0, 200);
       }
   }
-
 
   function injectAndSendMessage(action, userFriendlyName) {
     hideAllPreviewAreas(); 
@@ -123,7 +115,6 @@ document.addEventListener('DOMContentLoaded', () => {
       currentTabId = tabs[0].id; 
       try { currentHostname = new URL(tabs[0].url).hostname || "unknown_page"; } 
       catch { currentHostname = "unknown_page_invalid_url"; }
-
 
       if (tabs[0].url?.startsWith('chrome://') || tabs[0].url?.startsWith('https://chrome.google.com')) {
           console.warn(`Cannot inject script into restricted URL: ${tabs[0].url} for ${userFriendlyName}.`);
@@ -162,12 +153,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (viewTablesBtn) viewTablesBtn.addEventListener('click', () => injectAndSendMessage("extractTablesForPreview", "Tables"));
 
   function createItemCheckbox(itemValue, itemDataAttributes = {}) {
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
       checkbox.value = itemValue;
-      for (const key in itemDataAttributes) {
-          checkbox.dataset[key] = itemDataAttributes[key];
-      }
+      for (const key in itemDataAttributes) checkbox.dataset[key] = itemDataAttributes[key];
       checkbox.addEventListener('change', () => {
           if (itemDataAttributes.listId === 'imageList') updateSectionState(imageListDiv, downloadSelectedImagesBtn, selectAllImagesCheckbox);
           else if (itemDataAttributes.listId === 'jsList') updateSectionState(jsListDiv, downloadSelectedJsBtn, selectAllJsCheckbox);
@@ -188,7 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const itemDiv = document.createElement('div'); itemDiv.className = 'item';
         const checkbox = createItemCheckbox(image.id, { url: image.src, alt: image.alt || '', listId: 'imageList' });
         const imgTag = document.createElement('img'); imgTag.className = 'thumbnail';
-        imgTag.onerror = function() { this.alt='Failed to load'; this.src=''; this.style.border='1px dashed red';}; // Visual indication of load failure
+        imgTag.onerror = function() { this.alt='Failed to load'; this.src=''; this.style.border='1px dashed red';};
         if (image.src === 'data_url_preview_too_long' || image.src === 'invalid_url_or_base64_too_long') {
             imgTag.alt = image.src; imgTag.src = ''; 
         } else { imgTag.src = image.src; imgTag.alt = image.alt || 'Preview';}
@@ -252,53 +240,92 @@ document.addEventListener('DOMContentLoaded', () => {
     tablePreviewArea.style.display = 'block';
     updateSectionState(tableListDiv, downloadSelectedTablesBtn, selectAllTablesCheckbox);
   }
+  
+  // Helper to check if content is just boilerplate (simple check based on line count after header)
+  function isContentEffectivelyEmpty(content, expectedHeaderLines) {
+      if (!content) return true;
+      const lines = content.split('\n');
+      // Check if content has more than just the header lines and some minimal actual content lines
+      // This is a heuristic. A more robust check might involve checking for non-comment lines.
+      return lines.length <= expectedHeaderLines + 2; // Allow for a couple of blank lines or minimal content
+  }
+
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message || !message.action) { console.warn("Received an invalid message:", message); return; }
+    let initialStatus = "";
+    let proceedWithDownload = true;
+
     switch (message.action) {
       case "imageListForPreview": displayImagePreviews(message.images); break;
       case "jsListForPreview": displayJsPreviews(message.scripts); break;
       case "tableListForPreview": displayTablePreviews(message.tables); break;
       case "statusUpdate": statusDiv.textContent = message.text; break;
+      
       case "combinedJsContentToDownload":
-        if (message.errorStatus) { statusDiv.textContent = message.errorStatus; break; }
-        if (message.content && message.filename) {
-          statusDiv.textContent = `Preparing download for ${message.filename}...`;
+        if (message.errorStatus) {
+            initialStatus = message.errorStatus;
+            if (isContentEffectivelyEmpty(message.content, 3)) { // JS header is ~3 lines
+                statusDiv.textContent = message.errorStatus + " No downloadable content generated.";
+                proceedWithDownload = false;
+            } else {
+                statusDiv.textContent = message.errorStatus + " Proceeding with download of partial results...";
+            }
+        } else {
+            statusDiv.textContent = `Preparing download for ${message.filename}...`;
+        }
+
+        if (proceedWithDownload && message.content && message.filename) {
           try {
             const blob = new Blob([message.content], { type: 'text/javascript;charset=utf-8' });
             const objectUrl = URL.createObjectURL(blob);
             chrome.downloads.download({ url: objectUrl, filename: message.filename, saveAs: true }, (downloadId) => {
               if (chrome.runtime.lastError) {
-                statusDiv.textContent = `Download failed for ${message.filename}: ${chrome.runtime.lastError.message}`;
+                statusDiv.textContent = initialStatus ? initialStatus + ` Download failed: ${chrome.runtime.lastError.message}` : `Download failed for ${message.filename}: ${chrome.runtime.lastError.message}`;
               } else if (downloadId === undefined) {
-                statusDiv.textContent = `Download of ${message.filename} did not start. Check browser settings.`;
+                statusDiv.textContent = initialStatus ? initialStatus + ` Download did not start. Check browser settings.` : `Download of ${message.filename} did not start. Check browser settings.`;
               } else {
-                statusDiv.textContent = `Download started: ${message.filename}`;
+                statusDiv.textContent = initialStatus ? initialStatus + ` Download started: ${message.filename}` : `Download started: ${message.filename}`;
               }
               URL.revokeObjectURL(objectUrl);
             });
-          } catch (e) { statusDiv.textContent = `Error creating JS file: ${e.message}`; }
-        } else { statusDiv.textContent = "Error: No JS content received for download."; }
+          } catch (e) { statusDiv.textContent = initialStatus ? initialStatus + ` Error creating JS file: ${e.message}` : `Error creating JS file: ${e.message}`; }
+        } else if (proceedWithDownload && (!message.content || !message.filename)) {
+             statusDiv.textContent = initialStatus ? initialStatus + " Error: Missing content or filename for JS download." : "Error: Missing content or filename for JS download.";
+        }
         break;
+
       case "combinedTableDataToDownload":
-        if (message.errorStatus) { statusDiv.textContent = message.errorStatus; break; }
-        if (message.content && message.filename) {
-          statusDiv.textContent = `Preparing download for ${message.filename}...`;
+        if (message.errorStatus) {
+            initialStatus = message.errorStatus;
+            if (isContentEffectivelyEmpty(message.content, 3)) { // CSV header is ~3 lines
+                statusDiv.textContent = message.errorStatus + " No downloadable content generated.";
+                proceedWithDownload = false;
+            } else {
+                statusDiv.textContent = message.errorStatus + " Proceeding with download of partial results...";
+            }
+        } else {
+            statusDiv.textContent = `Preparing download for ${message.filename}...`;
+        }
+
+        if (proceedWithDownload && message.content && message.filename) {
           try {
             const blob = new Blob([message.content], { type: 'text/csv;charset=utf-8' });
             const objectUrl = URL.createObjectURL(blob);
             chrome.downloads.download({ url: objectUrl, filename: message.filename, saveAs: true }, (downloadId) => {
               if (chrome.runtime.lastError) {
-                statusDiv.textContent = `Download failed for ${message.filename}: ${chrome.runtime.lastError.message}`;
+                statusDiv.textContent = initialStatus ? initialStatus + ` Download failed: ${chrome.runtime.lastError.message}` : `Download failed for ${message.filename}: ${chrome.runtime.lastError.message}`;
               } else if (downloadId === undefined) {
-                statusDiv.textContent = `Download of ${message.filename} did not start. Check browser settings.`;
+                statusDiv.textContent = initialStatus ? initialStatus + ` Download did not start. Check browser settings.` : `Download of ${message.filename} did not start. Check browser settings.`;
               } else {
-                statusDiv.textContent = `Download started: ${message.filename}`;
+                statusDiv.textContent = initialStatus ? initialStatus + ` Download started: ${message.filename}` : `Download started: ${message.filename}`;
               }
               URL.revokeObjectURL(objectUrl);
             });
-          } catch (e) { statusDiv.textContent = `Error creating CSV file: ${e.message}`; }
-        } else { statusDiv.textContent = "Error: No table data received for download."; }
+          } catch (e) { statusDiv.textContent = initialStatus ? initialStatus + ` Error creating CSV file: ${e.message}` : `Error creating CSV file: ${e.message}`; }
+        } else if (proceedWithDownload && (!message.content || !message.filename)) {
+            statusDiv.textContent = initialStatus ? initialStatus + " Error: Missing content or filename for CSV download." : "Error: Missing content or filename for CSV download.";
+        }
         break;
       default: console.warn("Received unknown message action in popup:", message.action, message); break;
     }
