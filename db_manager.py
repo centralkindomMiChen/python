@@ -1,243 +1,339 @@
-﻿import mysql.connector
+import mysql.connector
 from mysql.connector import errorcode
 import datetime
 
 DB_CONFIG = {
     'user': 'root',
     'password': '123',
-    'host': '127.0.0.1',
-    'charset': 'utf8'
+    'host': '127.0.0.1', # Assuming localhost
+    'database': 'michentestdb5',
+    'raise_on_warnings': True,
+    # MySQL 5.4 might need explicit charset settings for full UTF-8
+    'charset': 'utf8mb4', # utf8mb4 is preferred for full Unicode support
+    'collation': 'utf8mb4_general_ci',
+    'use_pure': True # Helps avoid some OpenSSL issues on some systems
 }
-DB_NAME = 'michentestdb5'
-VACATION_TABLE = 'vacations'
-MEETING_TABLE = 'meetings'
+
+# SQL Commands for table creation
+TABLES = {}
+TABLES['vacations'] = (
+    "CREATE TABLE `vacations` ("
+    "  `id` int(11) NOT NULL AUTO_INCREMENT,"
+    "  `vacation_date` date NOT NULL,"
+    "  `type` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,"
+    "  `remarks` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,"
+    "  `cancelled` tinyint(1) DEFAULT 0,"
+    "  `deletion_reason` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,"
+    "  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,"
+    "  PRIMARY KEY (`id`),"
+    "  UNIQUE KEY `idx_vacation_date` (`vacation_date`)"
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+
+TABLES['meetings'] = (
+    "CREATE TABLE `meetings` ("
+    "  `id` int(11) NOT NULL AUTO_INCREMENT,"
+    "  `meeting_date` date NOT NULL,"
+    "  `content` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,"
+    "  `cancelled` tinyint(1) DEFAULT 0,"
+    "  `deletion_reason` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,"
+    "  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,"
+    "  PRIMARY KEY (`id`),"
+    "  UNIQUE KEY `idx_meeting_date` (`meeting_date`)"
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+
 
 class DatabaseManager:
     def __init__(self):
-        self.cnx = None
-        self.ensure_database_and_table()
+        self.conn = None
+        self.connect()
+        if self.conn:
+            self.create_database_if_not_exists() # Ensure DB exists before creating tables
+            self.create_tables()
 
-    def _connect_server(self):
+    def connect(self):
         try:
-            return mysql.connector.connect(**DB_CONFIG)
+            # Try connecting to the specific database first
+            self.conn = mysql.connector.connect(**DB_CONFIG)
+            print("Successfully connected to the database.")
         except mysql.connector.Error as err:
-            print(f"数据库服务器连接失败: {err}")
-            return None
+            if err.errno == errorcode.ER_BAD_DB_ERROR:
+                # Database doesn't exist, connect without specifying DB
+                # to create it
+                temp_config = DB_CONFIG.copy()
+                del temp_config['database']
+                try:
+                    self.conn = mysql.connector.connect(**temp_config)
+                    print("Connected to MySQL server (database will be created).")
+                except mysql.connector.Error as e:
+                    print(f"Error connecting to MySQL server: {e}")
+                    self.conn = None # Ensure conn is None if connection failed
+                    raise ConnectionError(f"MySQL Server connection failed: {e}") from e
+            else:
+                print(f"Error connecting to database: {err}")
+                self.conn = None # Ensure conn is None
+                raise ConnectionError(f"Database connection failed: {err}") from err
 
-    def _connect_db(self):
+    def create_database_if_not_exists(self):
+        if not self.conn:
+            print("No connection to MySQL server, cannot create database.")
+            return
+
+        cursor = None
         try:
-            db_conn_config = DB_CONFIG.copy()
-            db_conn_config['database'] = DB_NAME
-            return mysql.connector.connect(**db_conn_config)
-        except mysql.connector.Error as err:
-            print(f"连接到数据库 {DB_NAME} 失败: {err}")
-            return None
-
-    def ensure_database_and_table(self):
-        server_cnx = self._connect_server()
-        if not server_cnx:
-            print("无法连接到MySQL服务器，请检查配置和服务器状态。")
-            raise ConnectionError("无法连接到MySQL服务器")
-
-        cursor = server_cnx.cursor()
-        try:
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{DB_NAME}` CHARACTER SET utf8 COLLATE utf8_general_ci")
-            print(f"数据库 '{DB_NAME}' 已确保存在。")
-        except mysql.connector.Error as err:
-            print(f"创建数据库 '{DB_NAME}' 失败: {err}")
-            cursor.close()
-            server_cnx.close()
-            raise
-        cursor.close()
-        server_cnx.close()
-
-        self.cnx = self._connect_db()
-        if not self.cnx:
-            print(f"无法连接到数据库 {DB_NAME}，即使它可能已创建。")
-            raise ConnectionError(f"无法连接到数据库 {DB_NAME}")
-
-        self.create_table_if_not_exists()
-
-    def _get_connection(self):
-        if self.cnx is None or not self.cnx.is_connected():
-            self.cnx = self._connect_db()
-            if self.cnx is None:
-                print("数据库连接丢失且无法重建！")
-                raise ConnectionError("数据库连接丢失且无法重建！")
-        return self.cnx
-
-    def execute_query(self, query, params=None, fetch=False, multi=False, is_ddl=False):
-        cnx = self._get_connection()
-        cursor = cnx.cursor()
-        try:
-            cursor.execute(query, params)
-            if is_ddl or query.strip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
-                cnx.commit()
-                if query.strip().upper().startswith("INSERT") and cursor.lastrowid:
-                    return cursor.lastrowid
-                return True
-            if fetch:
-                return cursor.fetchall() if multi else cursor.fetchone()
-            return True
-        except mysql.connector.Error as err:
-            print(f"数据库查询错误: {err}")
+            # Important: use_pure=True for connect() might be needed if C extensions are not available or cause issues
+            # For charset with older MySQL, 'utf8' might be the actual max, not 'utf8mb4'
+            # Let's try utf8 for db creation if utf8mb4 fails for older versions.
+            db_name = DB_CONFIG['database']
+            cursor = self.conn.cursor()
             try:
-                executed_query = cursor.statement if cursor._executed else "无法获取执行的查询语句"
-                print(f"查询语句: {executed_query}")
+                cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+                print(f"Database '{db_name}' ensured (utf8mb4).")
+            except mysql.connector.Error as err_utf8mb4:
+                print(f"Warning: Could not create database with utf8mb4 ({err_utf8mb4}). Trying utf8...")
+                try:
+                    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci")
+                    print(f"Database '{db_name}' ensured (utf8).")
+                except mysql.connector.Error as err_utf8:
+                    print(f"Error creating database '{db_name}' with utf8: {err_utf8}")
+                    raise # Re-raise the error if utf8 also fails
+
+            self.conn.database = db_name # Switch to the database
+        except mysql.connector.Error as err:
+            print(f"Failed to create database '{DB_CONFIG['database']}': {err}")
+            # If DB creation fails, it's a critical error.
+            # Closing connection as it might be in an unstable state.
+            if self.conn.is_connected():
+                self.conn.close()
+            self.conn = None
+            raise ConnectionError(f"Failed to create database: {err}") from err
+        finally:
+            if cursor:
+                cursor.close()
+
+
+    def create_tables(self):
+        if not self.conn or not self.conn.is_connected():
+            print("No database connection, cannot create tables.")
+            # Attempt to reconnect if connection was lost
+            try:
+                self.connect()
+                if not self.conn or not self.conn.is_connected(): # Check again after trying to connect
+                    raise ConnectionError("Failed to reconnect to the database.")
+            except ConnectionError as e:
+                print(f"Error during table creation (reconnect failed): {e}")
+                return # Exit if connection cannot be established
+
+        cursor = self.conn.cursor()
+        self.conn.database = DB_CONFIG['database'] # Ensure correct DB is selected
+        for table_name, table_description in TABLES.items():
+            try:
+                print(f"Creating table {table_name}: ", end='')
+                cursor.execute(table_description)
+                print("OK")
+            except mysql.connector.Error as err:
+                if err.errno == errorcode.ER_TABLE_EXISTS_ERROR:
+                    print("already exists.")
+                else:
+                    print(f"Failed: {err.msg}")
+                    # Consider if this should raise an error and stop initialization
             except Exception as e:
-                print(f"无法打印查询语句: {e}")
-            cnx.rollback()
-            return False
+                print(f"An unexpected error occurred during table creation for {table_name}: {e}")
+        cursor.close()
+
+    def _execute_query(self, query, params=None, multi=False, fetch_one=False, fetch_all=False, commit=False):
+        if not self.conn or not self.conn.is_connected():
+            print("Database not connected. Attempting to reconnect...")
+            try:
+                self.connect()
+                if not self.conn or not self.conn.is_connected():
+                     raise ConnectionError("Failed to reconnect to the database for query execution.")
+            except ConnectionError as e:
+                print(f"Query execution failed due to connection error: {e}")
+                return None # Or raise the error
+
+        cursor = self.conn.cursor(dictionary=True if fetch_one or fetch_all else False)
+        try:
+            cursor.execute(query, params or ())
+            if commit:
+                self.conn.commit()
+                return cursor.lastrowid or cursor.rowcount
+            if fetch_one:
+                return cursor.fetchone()
+            if fetch_all:
+                return cursor.fetchall()
+            return True # For non-SELECT, non-commit operations if needed
+        except mysql.connector.Error as err:
+            print(f"Database Error: {err}")
+            print(f"Query: {query}")
+            print(f"Params: {params}")
+            self.conn.rollback() # Rollback on error
+            return None # Indicate failure
+        except Exception as e:
+            print(f"An unexpected error occurred during query execution: {e}")
+            self.conn.rollback()
+            return None
         finally:
             cursor.close()
 
-    def create_table_if_not_exists(self):
-        # Create vacations table
-        create_vacation_table_query = f"""
-        CREATE TABLE IF NOT EXISTS `{VACATION_TABLE}` (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            vacation_date DATE NOT NULL UNIQUE,
-            remarks VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            reason_for_deletion VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci DEFAULT NULL
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;
-        """
-        self.execute_query(create_vacation_table_query, is_ddl=True)
+    def add_vacation(self, vacation_date, type, remarks=None):
+        query = ("INSERT INTO vacations (vacation_date, type, remarks, cancelled) "
+                 "VALUES (%s, %s, %s, 0) "
+                 "ON DUPLICATE KEY UPDATE type=%s, remarks=%s, cancelled=0, deletion_reason=NULL")
+        # Convert date object to string if it's not already
+        date_str = vacation_date.isoformat() if isinstance(vacation_date, (datetime.date, datetime.datetime)) else vacation_date
+        params = (date_str, type, remarks, type, remarks)
+        return self._execute_query(query, params, commit=True)
 
-        # Create meetings table
-        create_meeting_table_query = f"""
-        CREATE TABLE IF NOT EXISTS `{MEETING_TABLE}` (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            meeting_date DATE NOT NULL UNIQUE,
-            content TEXT CHARACTER SET utf8 COLLATE utf8_general_ci,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;
-        """
-        self.execute_query(create_meeting_table_query, is_ddl=True)
+    def add_meeting(self, meeting_date, content):
+        query = ("INSERT INTO meetings (meeting_date, content, cancelled) "
+                 "VALUES (%s, %s, 0) "
+                 "ON DUPLICATE KEY UPDATE content=%s, cancelled=0, deletion_reason=NULL")
+        date_str = meeting_date.isoformat() if isinstance(meeting_date, (datetime.date, datetime.datetime)) else meeting_date
+        params = (date_str, content, content)
+        return self._execute_query(query, params, commit=True)
 
-        # Ensure columns exist (optional for robustness)
-        check_remarks_query = f"""
-        SELECT COLUMN_NAME 
-        FROM INFORMATION_SCHEMA.COLUMNS 
-        WHERE TABLE_SCHEMA = '{DB_NAME}' 
-        AND TABLE_NAME = '{VACATION_TABLE}' 
-        AND COLUMN_NAME = 'remarks';
-        """
-        if not self.execute_query(check_remarks_query, fetch=True):
-            alter_vacation_query = f"""
-            ALTER TABLE `{VACATION_TABLE}` 
-            ADD COLUMN remarks VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci NULL AFTER vacation_date;
-            """
-            self.execute_query(alter_vacation_query, is_ddl=True)
+    def get_vacation_by_date(self, vacation_date):
+        query = "SELECT type, remarks, cancelled FROM vacations WHERE vacation_date = %s"
+        date_str = vacation_date.isoformat() if isinstance(vacation_date, (datetime.date, datetime.datetime)) else vacation_date
+        return self._execute_query(query, (date_str,), fetch_one=True)
 
-    def add_vacation(self, date_obj, remarks):
-        query = f"INSERT INTO `{VACATION_TABLE}` (vacation_date, remarks) VALUES (%s, %s)"
-        try:
-            if isinstance(date_obj, str):
-                date_obj = datetime.datetime.strptime(date_obj, '%Y-%m-%d').date()
-            return self.execute_query(query, (date_obj, remarks))
-        except mysql.connector.IntegrityError:
-            print(f"日期 {date_obj} 的休假记录已存在。")
-            return False
-        except ValueError:
-            print(f"提供的日期格式不正确: {date_obj}")
-            return False
+    def get_meeting_by_date(self, meeting_date):
+        query = "SELECT content, cancelled FROM meetings WHERE meeting_date = %s"
+        date_str = meeting_date.isoformat() if isinstance(meeting_date, (datetime.date, datetime.datetime)) else meeting_date
+        return self._execute_query(query, (date_str,), fetch_one=True)
 
-    def get_vacation_by_date(self, date_obj):
-        query = f"SELECT remarks FROM `{VACATION_TABLE}` WHERE vacation_date = %s"
-        if isinstance(date_obj, str):
-            date_obj = datetime.datetime.strptime(date_obj, '%Y-%m-%d').date()
-        return self.execute_query(query, (date_obj,), fetch=True)
+    def get_records_in_date_range(self, start_date, end_date):
+        # Returns a dictionary with 'vacations' and 'meetings' lists
+        records = {'vacations': [], 'meetings': []}
 
-    def get_vacations_in_range(self, start_date, end_date):
-        query = f"SELECT vacation_date, remarks FROM `{VACATION_TABLE}` WHERE vacation_date BETWEEN %s AND %s ORDER BY vacation_date"
-        if isinstance(start_date, str):
-            start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d').date()
-        if isinstance(end_date, str):
-            end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d').date()
-        return self.execute_query(query, (start_date, end_date), fetch=True, multi=True)
+        start_str = start_date.isoformat() if isinstance(start_date, (datetime.date, datetime.datetime)) else start_date
+        end_str = end_date.isoformat() if isinstance(end_date, (datetime.date, datetime.datetime)) else end_date
+
+        query_vac = "SELECT vacation_date, type, remarks, cancelled FROM vacations WHERE vacation_date BETWEEN %s AND %s ORDER BY vacation_date"
+        vacations_data = self._execute_query(query_vac, (start_str, end_str), fetch_all=True)
+        if vacations_data:
+            records['vacations'] = vacations_data
+
+        query_meet = "SELECT meeting_date, content, cancelled FROM meetings WHERE meeting_date BETWEEN %s AND %s ORDER BY meeting_date"
+        meetings_data = self._execute_query(query_meet, (start_str, end_str), fetch_all=True)
+        if meetings_data:
+            records['meetings'] = meetings_data
+
+        return records
+
+    def delete_vacation(self, vacation_date, reason=""):
+        query = "UPDATE vacations SET cancelled = 1, deletion_reason = %s WHERE vacation_date = %s AND cancelled = 0"
+        date_str = vacation_date.isoformat() if isinstance(vacation_date, (datetime.date, datetime.datetime)) else vacation_date
+        return self._execute_query(query, (reason, date_str), commit=True)
+
+    def delete_meeting(self, meeting_date, reason=""):
+        query = "UPDATE meetings SET cancelled = 1, deletion_reason = %s WHERE meeting_date = %s AND cancelled = 0"
+        date_str = meeting_date.isoformat() if isinstance(meeting_date, (datetime.date, datetime.datetime)) else meeting_date
+        return self._execute_query(query, (reason, date_str), commit=True)
 
     def get_all_vacations_for_export(self):
-        query = f"SELECT vacation_date, remarks, created_at FROM `{VACATION_TABLE}` ORDER BY vacation_date"
-        results = self.execute_query(query, fetch=True, multi=True)
-        if results:
-            return [(r[0].strftime('%Y-%m-%d'), r[1], r[2].strftime('%Y-%m-%d %H:%M:%S') if isinstance(r[2], datetime.datetime) else r[2]) for r in results]
-        return []
+        query = "SELECT vacation_date, type, remarks, cancelled, deletion_reason, created_at FROM vacations ORDER BY vacation_date"
+        return self._execute_query(query, fetch_all=True)
 
-    def get_recent_vacations(self, days_span=365):
-        start_date = (datetime.date.today() - datetime.timedelta(days=days_span))
-        query = f"""
-        SELECT vacation_date, remarks
-        FROM `{VACATION_TABLE}`
-        WHERE vacation_date >= %s
-        ORDER BY vacation_date DESC
-        """
-        results = self.execute_query(query, (start_date,), fetch=True, multi=True)
-        if results:
-            return [(r[0].strftime('%Y-%m-%d'), r[1]) for r in results]
-        return []
+    def get_all_meetings_for_export(self):
+        query = "SELECT meeting_date, content, cancelled, deletion_reason, created_at FROM meetings ORDER BY meeting_date"
+        return self._execute_query(query, fetch_all=True)
 
-    def delete_vacation(self, date_obj, reason=""):
-        query_update_reason = f"UPDATE `{VACATION_TABLE}` SET reason_for_deletion = %s WHERE vacation_date = %s"
-        query_delete = f"DELETE FROM `{VACATION_TABLE}` WHERE vacation_date = %s"
-        
-        if isinstance(date_obj, str):
-            date_obj = datetime.datetime.strptime(date_obj, '%Y-%m-%d').date()
+    def get_recent_records(self, days_limit=365):
+        # Returns a dictionary with 'vacations' and 'meetings' lists for the last year
+        records = {'vacations': [], 'meetings': []}
+        one_year_ago = (datetime.date.today() - datetime.timedelta(days=days_limit)).isoformat()
+        today_str = datetime.date.today().isoformat()
 
-        # self.execute_query(query_update_reason, (reason, date_obj)) # Optional: log reason
-        return self.execute_query(query_delete, (date_obj,))
+        query_vac = ("SELECT vacation_date, type, remarks, cancelled FROM vacations "
+                     "WHERE vacation_date BETWEEN %s AND %s ORDER BY vacation_date DESC")
+        vacations_data = self._execute_query(query_vac, (one_year_ago, today_str), fetch_all=True)
+        if vacations_data:
+            records['vacations'] = vacations_data
 
-    def add_meeting(self, date_obj, content):
-        query = f"INSERT INTO `{MEETING_TABLE}` (meeting_date, content) VALUES (%s, %s)"
-        try:
-            if isinstance(date_obj, str):
-                date_obj = datetime.datetime.strptime(date_obj, '%Y-%m-%d').date()
-            return self.execute_query(query, (date_obj, content))
-        except mysql.connector.IntegrityError:
-            print(f"日期 {date_obj} 的会议记录已存在。")
-            return False
-        except ValueError:
-            print(f"提供的日期格式不正确: {date_obj}")
-            return False
+        query_meet = ("SELECT meeting_date, content, cancelled FROM meetings "
+                      "WHERE meeting_date BETWEEN %s AND %s ORDER BY meeting_date DESC")
+        meetings_data = self._execute_query(query_meet, (one_year_ago, today_str), fetch_all=True)
+        if meetings_data:
+            records['meetings'] = meetings_data
 
-    def get_meeting_by_date(self, date_obj):
-        query = f"SELECT content FROM `{MEETING_TABLE}` WHERE meeting_date = %s"
-        if isinstance(date_obj, str):
-            date_obj = datetime.datetime.strptime(date_obj, '%Y-%m-%d').date()
-        return self.execute_query(query, (date_obj,), fetch=True)
-
-    def get_meetings_in_range(self, start_date, end_date):
-        query = f"SELECT meeting_date, content FROM `{MEETING_TABLE}` WHERE meeting_date BETWEEN %s AND %s ORDER BY meeting_date"
-        if isinstance(start_date, str):
-            start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d').date()
-        if isinstance(end_date, str):
-            end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d').date()
-        return self.execute_query(query, (start_date, end_date), fetch=True, multi=True)
-
-    def get_recent_meetings(self):
-        start_date = datetime.date.today() - datetime.timedelta(days=30)  # Past 1 month
-        end_date = datetime.date.today() + datetime.timedelta(days=365)   # Next 1 year
-        query = f"""
-        SELECT meeting_date, content
-        FROM `{MEETING_TABLE}`
-        WHERE meeting_date BETWEEN %s AND %s
-        ORDER BY meeting_date DESC
-        """
-        results = self.execute_query(query, (start_date, end_date), fetch=True, multi=True)
-        if results:
-            return [(r[0].strftime('%Y-%m-%d'), r[1]) for r in results]
-        return []
-
-    def delete_meeting(self, date_obj):
-        query = f"DELETE FROM `{MEETING_TABLE}` WHERE meeting_date = %s"
-        if isinstance(date_obj, str):
-            date_obj = datetime.datetime.strptime(date_obj, '%Y-%m-%d').date()
-        return self.execute_query(query, (date_obj,))
+        return records
 
     def close(self):
-        if self.cnx and self.cnx.is_connected():
-            self.cnx.close()
-            print("数据库连接已关闭。")
+        if self.conn and self.conn.is_connected():
+            self.conn.close()
+            print("Database connection closed.")
 
-    def __del__(self):
-        self.close()
+# Example Usage (for testing this module directly)
+if __name__ == '__main__':
+    try:
+        db_manager = DatabaseManager()
+        if not db_manager.conn:
+            print("DB Manager connection object is None. Exiting test.")
+        else:
+            print("DatabaseManager initialized.")
+
+            # Test adding a vacation
+            today = datetime.date.today()
+            # added_vac = db_manager.add_vacation(today, "年休假", "测试年休 (Test Annual Leave)")
+            # if added_vac:
+            #     print(f"Vacation added for {today}")
+            # else:
+            #     print(f"Failed to add vacation for {today} or it already exists and was updated.")
+
+            # # Test adding a meeting
+            # tomorrow = today + datetime.timedelta(days=1)
+            # added_meet = db_manager.add_meeting(tomorrow, "重要项目会议 (Important Project Meeting)")
+            # if added_meet:
+            #     print(f"Meeting added for {tomorrow}")
+            # else:
+            #     print(f"Failed to add meeting for {tomorrow} or it already exists and was updated.")
+
+            # Test retrieving records
+            print("\n--- Records for today ---")
+            vac_today = db_manager.get_vacation_by_date(today)
+            if vac_today: print(f"Vacation on {today}: {vac_today}")
+            else: print(f"No vacation on {today} or query failed.")
+
+            meet_today = db_manager.get_meeting_by_date(today)
+            if meet_today: print(f"Meeting on {today}: {meet_today}")
+            else: print(f"No meeting on {today} or query failed.")
+
+            print("\n--- Records in range (last 7 days) ---")
+            last_week = today - datetime.timedelta(days=7)
+            range_records = db_manager.get_records_in_date_range(last_week, today)
+            print(f"Vacations in range: {range_records['vacations']}")
+            print(f"Meetings in range: {range_records['meetings']}")
+
+            # # Test deleting vacation (if it was added)
+            # if vac_today and not vac_today['cancelled']:
+            #     deleted_vac = db_manager.delete_vacation(today, "测试删除 (Test deletion)")
+            #     if deleted_vac:
+            #         print(f"Vacation on {today} marked as cancelled.")
+            #         updated_vac = db_manager.get_vacation_by_date(today)
+            #         print(f"Updated vacation status: {updated_vac}")
+            #     else:
+            #         print(f"Failed to delete vacation on {today}")
+
+
+            print("\n--- Recent Records (last 30 days) ---")
+            recent = db_manager.get_recent_records(days_limit=30)
+            print(f"Recent Vacations: {recent['vacations']}")
+            print(f"Recent Meetings: {recent['meetings']}")
+
+            print("\n--- All Vacations for Export ---")
+            # all_vac = db_manager.get_all_vacations_for_export()
+            # if all_vac: print(f"Found {len(all_vac)} vacations for export.") # Avoid printing all data
+            # else: print("No vacations to export or query failed.")
+
+            print("\n--- All Meetings for Export ---")
+            # all_meet = db_manager.get_all_meetings_for_export()
+            # if all_meet: print(f"Found {len(all_meet)} meetings for export.")
+            # else: print("No meetings to export or query failed.")
+
+            db_manager.close()
+
+    except ConnectionError as e:
+        print(f"Critical Connection Error during DB Manager setup: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred in the test script: {e}")
