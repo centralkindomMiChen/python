@@ -8,10 +8,9 @@ DB_CONFIG = {
     'host': '127.0.0.1', # Assuming localhost
     'database': 'michentestdb5',
     'raise_on_warnings': True,
-    # MySQL 5.4 might need explicit charset settings for full UTF-8
-    'charset': 'utf8mb4', # utf8mb4 is preferred for full Unicode support
-    'collation': 'utf8mb4_general_ci',
-    'use_pure': True # Helps avoid some OpenSSL issues on some systems
+    'charset': 'utf8', # MODIFIED
+    'collation': 'utf8_general_ci', # MODIFIED
+    'use_pure': True
 }
 
 # SQL Commands for table creation
@@ -20,26 +19,26 @@ TABLES['vacations'] = (
     "CREATE TABLE `vacations` ("
     "  `id` int(11) NOT NULL AUTO_INCREMENT,"
     "  `vacation_date` date NOT NULL,"
-    "  `type` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,"
-    "  `remarks` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,"
+    "  `type` varchar(50) CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL," # MODIFIED
+    "  `remarks` text CHARACTER SET utf8 COLLATE utf8_general_ci," # MODIFIED
     "  `cancelled` tinyint(1) DEFAULT 0,"
-    "  `deletion_reason` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,"
+    "  `deletion_reason` text CHARACTER SET utf8 COLLATE utf8_general_ci DEFAULT NULL," # MODIFIED
     "  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,"
     "  PRIMARY KEY (`id`),"
     "  UNIQUE KEY `idx_vacation_date` (`vacation_date`)"
-    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci") # MODIFIED
 
 TABLES['meetings'] = (
     "CREATE TABLE `meetings` ("
     "  `id` int(11) NOT NULL AUTO_INCREMENT,"
     "  `meeting_date` date NOT NULL,"
-    "  `content` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,"
+    "  `content` text CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL," # MODIFIED
     "  `cancelled` tinyint(1) DEFAULT 0,"
-    "  `deletion_reason` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,"
+    "  `deletion_reason` text CHARACTER SET utf8 COLLATE utf8_general_ci DEFAULT NULL," # MODIFIED
     "  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,"
     "  PRIMARY KEY (`id`),"
     "  UNIQUE KEY `idx_meeting_date` (`meeting_date`)"
-    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci") # MODIFIED
 
 
 class DatabaseManager:
@@ -85,27 +84,28 @@ class DatabaseManager:
             # Let's try utf8 for db creation if utf8mb4 fails for older versions.
             db_name = DB_CONFIG['database']
             cursor = self.conn.cursor()
+            # Try creating with utf8 first, as requested for compatibility
             try:
-                cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-                print(f"Database '{db_name}' ensured (utf8mb4).")
-            except mysql.connector.Error as err_utf8mb4:
-                print(f"Warning: Could not create database with utf8mb4 ({err_utf8mb4}). Trying utf8...")
+                cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci")
+                print(f"Database '{db_name}' ensured (utf8).")
+            except mysql.connector.Error as err_utf8:
+                print(f"Warning: Could not create database with utf8 ({err_utf8}). Attempting with utf8mb4 as fallback...")
+                # Fallback to utf8mb4 if utf8 somehow fails (e.g. on a newer system where it's preferred)
+                # This part might be removed if strict utf8 is the only goal. For now, keeping it.
                 try:
-                    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci")
-                    print(f"Database '{db_name}' ensured (utf8).")
-                except mysql.connector.Error as err_utf8:
-                    print(f"Error creating database '{db_name}' with utf8: {err_utf8}")
-                    raise # Re-raise the error if utf8 also fails
+                    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+                    print(f"Database '{db_name}' ensured (utf8mb4 fallback).")
+                except mysql.connector.Error as err_utf8mb4:
+                    print(f"Error creating database '{db_name}' with utf8mb4 fallback: {err_utf8mb4}")
+                    raise # Re-raise the error if both fail
 
-            self.conn.database = db_name # Switch to the database
+            self.conn.database = db_name
         except mysql.connector.Error as err:
-            print(f"Failed to create database '{DB_CONFIG['database']}': {err}")
-            # If DB creation fails, it's a critical error.
-            # Closing connection as it might be in an unstable state.
-            if self.conn.is_connected():
+            print(f"Failed to create or select database '{db_name}': {err}")
+            if self.conn and self.conn.is_connected():
                 self.conn.close()
             self.conn = None
-            raise ConnectionError(f"Failed to create database: {err}") from err
+            raise ConnectionError(f"Failed to create/select database: {err}") from err
         finally:
             if cursor:
                 cursor.close()
