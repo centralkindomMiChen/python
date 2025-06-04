@@ -741,7 +741,7 @@ class VacationApp:
         self.recent_meetings_tree.pack(fill=tk.BOTH, expand=True)
 
     def update_recent_records_list(self):
-        if not self.db or not hasattr(self.db, 'conn') or not self.db.conn:
+        if not hasattr(self, 'db') or not self.db or not hasattr(self.db, 'conn') or not self.db.conn:
             print("DB not available, cannot update recent records list.")
             return
 
@@ -751,24 +751,58 @@ class VacationApp:
         for item in self.recent_meetings_tree.get_children():
             self.recent_meetings_tree.delete(item)
 
-        recent_data = self.db.get_recent_records() # Default is last 365 days
+        try:
+            recent_data = self.db.get_recent_records()
+        except Exception as e:
+            print(f"Error fetching recent records from DB: {e}")
+            # Optionally, show a message to the user in the UI if this fails
+            # For now, just console print and return.
+            return
 
+        print(f"Fetched recent_data: vacations count = {len(recent_data.get('vacations', []))}, meetings count = {len(recent_data.get('meetings', []))}") # DEBUG PRINT
+
+        # Populate Vacations Treeview
         if recent_data.get('vacations'):
-            for vac in recent_data['vacations']:
-                date_val = excel_exporter.format_value(vac.get('vacation_date')) # Use same formatter
-                type_val = vac.get('type', '')
-                remarks_val = vac.get('remarks', '')
-                status_val = "已取消" if vac.get('cancelled') else "有效"
-                self.recent_vacations_tree.insert('', tk.END, values=(date_val, type_val, remarks_val, status_val))
+            print("Populating vacations tree...") # DEBUG PRINT
+            for i, vac in enumerate(recent_data['vacations']):
+                try:
+                    date_val = excel_exporter.format_value(vac.get('vacation_date'))
+                    type_val = vac.get('type', '')
+                    remarks_val = vac.get('remarks', '')
+                    status_val = "已取消" if vac.get('cancelled') else "有效"
 
+                    # DEBUG PRINT for the specific record causing issues
+                    print(f"  Attempting to insert vacation {i}: Date='{date_val}', Type='{type_val}', Remarks='{remarks_val}', Status='{status_val}'")
+
+                    self.recent_vacations_tree.insert('', tk.END, values=(date_val, type_val, remarks_val, status_val))
+                    print(f"  Successfully inserted vacation {i}") # DEBUG PRINT
+                except Exception as e:
+                    print(f"Error processing/inserting vacation record: {vac}")
+                    print(f"Vacation processing error: {e}")
+                    # Optionally, insert a placeholder indicating an error for this row, or just skip.
+        else:
+            print("No vacation data to display or 'vacations' key missing.") # DEBUG PRINT
+
+        # Populate Meetings Treeview
         if recent_data.get('meetings'):
-            for meet in recent_data['meetings']:
-                date_val = excel_exporter.format_value(meet.get('meeting_date'))
-                content_val = meet.get('content', '')
-                status_val = "已取消" if meet.get('cancelled') else "有效"
-                # Truncate long content for display in treeview if necessary
-                display_content = (content_val[:75] + '...') if len(content_val) > 75 else content_val
-                self.recent_meetings_tree.insert('', tk.END, values=(date_val, display_content, status_val))
+            print("Populating meetings tree...") # DEBUG PRINT
+            for i, meet in enumerate(recent_data['meetings']):
+                try:
+                    date_val = excel_exporter.format_value(meet.get('meeting_date'))
+                    content_val = meet.get('content', '')
+                    status_val = "已取消" if meet.get('cancelled') else "有效"
+                    display_content = (content_val[:75] + '...') if len(content_val) > 75 else content_val
+
+                    # DEBUG PRINT for the specific record
+                    print(f"  Attempting to insert meeting {i}: Date='{date_val}', Content='{display_content}', Status='{status_val}'")
+
+                    self.recent_meetings_tree.insert('', tk.END, values=(date_val, display_content, status_val))
+                    print(f"  Successfully inserted meeting {i}") # DEBUG PRINT
+                except Exception as e:
+                    print(f"Error processing/inserting meeting record: {meet}")
+                    print(f"Meeting processing error: {e}")
+        else:
+            print("No meeting data to display or 'meetings' key missing.") # DEBUG PRINT
 
     def create_status_bar(self):
         # Ensure status_bar_frame uses APP_BG_COLOR
