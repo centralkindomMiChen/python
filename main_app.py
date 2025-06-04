@@ -742,67 +742,85 @@ class VacationApp:
 
     def update_recent_records_list(self):
         if not hasattr(self, 'db') or not self.db or not hasattr(self.db, 'conn') or not self.db.conn:
-            print("DB not available, cannot update recent records list.")
+            print("DEBUG: DB not available for update_recent_records_list.")
             return
 
         # Clear existing items from Treeviews
+        print("DEBUG: Clearing recent_vacations_tree.")
         for item in self.recent_vacations_tree.get_children():
             self.recent_vacations_tree.delete(item)
+
+        print("DEBUG: Clearing recent_meetings_tree.")
         for item in self.recent_meetings_tree.get_children():
             self.recent_meetings_tree.delete(item)
 
         try:
             recent_data = self.db.get_recent_records()
         except Exception as e:
-            print(f"Error fetching recent records from DB: {e}")
-            # Optionally, show a message to the user in the UI if this fails
-            # For now, just console print and return.
+            print(f"DEBUG: Error fetching recent records from DB: {e}")
             return
 
-        print(f"Fetched recent_data: vacations count = {len(recent_data.get('vacations', []))}, meetings count = {len(recent_data.get('meetings', []))}") # DEBUG PRINT
+        vac_count = len(recent_data.get('vacations', []))
+        meet_count = len(recent_data.get('meetings', []))
+        print(f"DEBUG: Fetched recent_data: vacations count = {vac_count}, meetings count = {meet_count}")
 
         # Populate Vacations Treeview
-        if recent_data.get('vacations'):
-            print("Populating vacations tree...") # DEBUG PRINT
+        if vac_count > 0:
+            print("DEBUG: Populating vacations tree...")
             for i, vac in enumerate(recent_data['vacations']):
                 try:
-                    date_val = excel_exporter.format_value(vac.get('vacation_date'))
-                    type_val = vac.get('type', '')
-                    remarks_val = vac.get('remarks', '')
+                    # Simplify formatting for Treeview directly
+                    date_val_dt = vac.get('vacation_date')
+                    date_str = date_val_dt.strftime('%Y-%m-%d') if isinstance(date_val_dt, (datetime.date, datetime.datetime)) else str(date_val_dt or '')
+
+                    type_val = str(vac.get('type', ''))
+                    remarks_val = str(vac.get('remarks', ''))
                     status_val = "已取消" if vac.get('cancelled') else "有效"
 
-                    # DEBUG PRINT for the specific record causing issues
-                    print(f"  Attempting to insert vacation {i}: Date='{date_val}', Type='{type_val}', Remarks='{remarks_val}', Status='{status_val}'")
+                    values_tuple = (date_str, type_val, remarks_val, status_val)
+                    print(f"  DEBUG: Attempting to insert vacation {i}: {values_tuple}")
 
-                    self.recent_vacations_tree.insert('', tk.END, values=(date_val, type_val, remarks_val, status_val))
-                    print(f"  Successfully inserted vacation {i}") # DEBUG PRINT
+                    self.recent_vacations_tree.insert('', tk.END, text=f"Item {i}", values=values_tuple) # Added 'text' for potential direct display/debug
+                    print(f"  DEBUG: Successfully inserted vacation {i}")
                 except Exception as e:
-                    print(f"Error processing/inserting vacation record: {vac}")
-                    print(f"Vacation processing error: {e}")
-                    # Optionally, insert a placeholder indicating an error for this row, or just skip.
+                    print(f"DEBUG: Error processing/inserting vacation record: {vac}")
+                    print(f"DEBUG: Vacation processing error: {e}")
         else:
-            print("No vacation data to display or 'vacations' key missing.") # DEBUG PRINT
+            print("DEBUG: No vacation data to display.")
 
         # Populate Meetings Treeview
-        if recent_data.get('meetings'):
-            print("Populating meetings tree...") # DEBUG PRINT
+        if meet_count > 0:
+            print("DEBUG: Populating meetings tree...")
             for i, meet in enumerate(recent_data['meetings']):
                 try:
-                    date_val = excel_exporter.format_value(meet.get('meeting_date'))
-                    content_val = meet.get('content', '')
+                    date_val_dt = meet.get('meeting_date')
+                    date_str = date_val_dt.strftime('%Y-%m-%d') if isinstance(date_val_dt, (datetime.date, datetime.datetime)) else str(date_val_dt or '')
+
+                    content_val = str(meet.get('content', ''))
                     status_val = "已取消" if meet.get('cancelled') else "有效"
                     display_content = (content_val[:75] + '...') if len(content_val) > 75 else content_val
 
-                    # DEBUG PRINT for the specific record
-                    print(f"  Attempting to insert meeting {i}: Date='{date_val}', Content='{display_content}', Status='{status_val}'")
+                    values_tuple = (date_str, display_content, status_val)
+                    print(f"  DEBUG: Attempting to insert meeting {i}: {values_tuple}")
 
-                    self.recent_meetings_tree.insert('', tk.END, values=(date_val, display_content, status_val))
-                    print(f"  Successfully inserted meeting {i}") # DEBUG PRINT
+                    self.recent_meetings_tree.insert('', tk.END, text=f"Item {i}", values=values_tuple) # Added 'text'
+                    print(f"  DEBUG: Successfully inserted meeting {i}")
                 except Exception as e:
-                    print(f"Error processing/inserting meeting record: {meet}")
-                    print(f"Meeting processing error: {e}")
+                    print(f"DEBUG: Error processing/inserting meeting record: {meet}")
+                    print(f"DEBUG: Meeting processing error: {e}")
         else:
-            print("No meeting data to display or 'meetings' key missing.") # DEBUG PRINT
+            print("DEBUG: No meeting data to display.")
+
+        # Explicitly update the Treeview widgets if possible (Tkinter usually updates automatically)
+        # However, for some complex cases or older Tk versions, an explicit update might be considered.
+        # self.recent_vacations_tree.update_idletasks()
+        # self.recent_meetings_tree.update_idletasks()
+        # print("DEBUG: Called update_idletasks on treeviews.")
+        # Forcing a general UI update (use with caution, can lead to responsiveness issues if overused)
+        # self.root.update()
+        # print("DEBUG: Called self.root.update()")
+
+        print("DEBUG: update_recent_records_list finished.")
 
     def create_status_bar(self):
         # Ensure status_bar_frame uses APP_BG_COLOR
