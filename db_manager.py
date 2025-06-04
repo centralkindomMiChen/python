@@ -75,37 +75,55 @@ class DatabaseManager:
     def create_database_if_not_exists(self):
         if not self.conn:
             print("No connection to MySQL server, cannot create database.")
-            return
+            # This typically means the connect() method itself failed earlier (e.g. server not running)
+            # and self.conn would be None. Raising an error here might be more informative.
+            raise ConnectionError("Cannot create database: No active MySQL server connection.")
 
         cursor = None
+        db_name = DB_CONFIG['database']
+        database_selected_successfully = False
         try:
-            # Important: use_pure=True for connect() might be needed if C extensions are not available or cause issues
-            # For charset with older MySQL, 'utf8' might be the actual max, not 'utf8mb4'
-            # Let's try utf8 for db creation if utf8mb4 fails for older versions.
-            db_name = DB_CONFIG['database']
             cursor = self.conn.cursor()
-            # Try creating with utf8 first, as requested for compatibility
             try:
+                # Attempt to create the database with UTF8
                 cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci")
-                print(f"Database '{db_name}' ensured (utf8).")
+                print(f"Database '{db_name}' creation attempted/ensured (utf8).")
+                # If it gets here, the command executed. It either created it or it already existed.
+                # Now, try to select it.
+                self.conn.database = db_name
+                print(f"Successfully selected database '{db_name}'.")
+                database_selected_successfully = True
             except mysql.connector.Error as err_utf8:
-                print(f"Warning: Could not create database with utf8 ({err_utf8}). Attempting with utf8mb4 as fallback...")
-                # Fallback to utf8mb4 if utf8 somehow fails (e.g. on a newer system where it's preferred)
-                # This part might be removed if strict utf8 is the only goal. For now, keeping it.
-                try:
-                    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-                    print(f"Database '{db_name}' ensured (utf8mb4 fallback).")
-                except mysql.connector.Error as err_utf8mb4:
-                    print(f"Error creating database '{db_name}' with utf8mb4 fallback: {err_utf8mb4}")
-                    raise # Re-raise the error if both fail
+                # Check if the error is specifically "database exists"
+                if err_utf8.errno == errorcode.ER_DB_CREATE_EXISTS: # Error code 1007
+                    print(f"Database '{db_name}' already exists (utf8 check). Selecting it.")
+                    try:
+                        self.conn.database = db_name # Try to select it
+                        print(f"Successfully selected existing database '{db_name}'.")
+                        database_selected_successfully = True
+                    except mysql.connector.Error as err_select:
+                        print(f"Error selecting existing database '{db_name}': {err_select}")
+                        raise # Re-raise if selecting the existing DB fails
+                else:
+                    # Different error occurred during utf8 database creation
+                    print(f"Error during utf8 database creation attempt for '{db_name}': {err_utf8}")
+                    # At this point, we could try the utf8mb4 fallback if desired for other error types,
+                    # but given the user's specific problem, we want to avoid utf8mb4 if utf8 fails for 'Unknown charset'.
+                    # For now, if primary utf8 creation fails (not due to 'exists'), we re-raise.
+                    raise err_utf8 # Re-raise the original error from utf8 attempt
 
-            self.conn.database = db_name
-        except mysql.connector.Error as err:
-            print(f"Failed to create or select database '{db_name}': {err}")
+            # If database_selected_successfully is False here, it means an unhandled case or error.
+            if not database_selected_successfully:
+                 # This should ideally not be reached if logic above is correct
+                raise ConnectionError(f"Failed to ensure and select database '{db_name}' after creation attempts.")
+
+        except mysql.connector.Error as err: # Catch errors from the outer try or re-raised errors
+            print(f"Failed to create or select database '{db_name}' due to: {err}")
+            # It's possible self.conn is already closed or None if connect() failed before this method was called.
             if self.conn and self.conn.is_connected():
                 self.conn.close()
-            self.conn = None
-            raise ConnectionError(f"Failed to create/select database: {err}") from err
+            self.conn = None # Mark connection as unusable
+            raise ConnectionError(f"Database setup failed for '{db_name}': {err}") from err
         finally:
             if cursor:
                 cursor.close()
