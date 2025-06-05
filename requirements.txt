@@ -1,0 +1,4 @@
+openpyxl
+psutil
+mysql-connector-python
+tkcalendar
